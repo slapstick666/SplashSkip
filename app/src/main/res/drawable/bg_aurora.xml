@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  柔光背景：底层线性渐变 + 三个径向彩色光斑。
+
+  为什么必须做成光斑而不是纯渐变？
+  卡片是半透明白的，它「透出什么」完全由背景决定。
+  如果背景是一片均匀的浅渐变，卡片透出来也是均匀色，看起来就是一块灰板 ——
+  这正是第一版的失败原因。
+  光斑的边缘天然是柔和的（径向渐变 alpha 从高到低），
+  卡片透过去就会像「毛玻璃背后有模糊色块」，这才是 glassmorphism 的观感来源。
+
+  光斑参数：中心 alpha 约 40%，半径 380~420dp，确保边缘完全淡出、不留硬圈。
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 底色：极淡的三色线性渐变 -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="315"
+                android:centerColor="#F4EEFE"
+                android:endColor="#FDEDF5"
+                android:startColor="#EBF0FE"
+                android:type="linear" />
+        </shape>
+    </item>
+
+    <!-- 左上：冷蓝光斑 -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:centerX="0.12"
+                android:centerY="0.02"
+                android:endColor="#00A8C6FF"
+                android:gradientRadius="440dp"
+                android:startColor="#B3A8C6FF"
+                android:type="radial" />
+        </shape>
+    </item>
+
+    <!-- 右中：紫色光斑 -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:centerX="1.02"
+                android:centerY="0.30"
+                android:endColor="#00BC9CFF"
+                android:gradientRadius="400dp"
+                android:startColor="#ADBC9CFF"
+                android:type="radial" />
+        </shape>
+    </item>
+
+    <!-- 左下：粉色光斑 -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:centerX="0.22"
+                android:centerY="0.90"
+                android:endColor="#00FFA0C8"
+                android:gradientRadius="420dp"
+                android:startColor="#ADFFA0C8"
+                android:type="radial" />
+        </shape>
+    </item>
+
+    <!-- 底部偏右：淡青收口，避免左下粉和右中紫都集中在同一侧 -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:centerX="0.85"
+                android:centerY="0.98"
+                android:endColor="#0082E0D8"
+                android:gradientRadius="360dp"
+                android:startColor="#9982E0D8"
+                android:type="radial" />
+        </shape>
+    </item>
+
+</layer-list>

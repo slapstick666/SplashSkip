@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Shizuku 的授权声明。用户需要在 Shizuku 管理器中给本应用授权后才有 API_V23。 -->
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
+
+    <application>
+
+        <!--
+          ShizukuProvider 负责跨进程通信。authorities 必须带 applicationId 前缀，
+          否则 debug 包和 release 包同时安装会冲突。
+        -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:enabled="true"
+            android:exported="true"
+            android:multiprocess="false"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
+        <!--
+          accessibilityEventTypes 选三个，各有用途：
+            typeWindowStateChanged   —— 窗口切换，主要触发点（拿到 Activity 全名）
+            typeWindowContentChanged —— 内容变化，应对「广告异步加载、按钮后出现」
+            typeWindowsChanged       —— 多窗口 / 弹层变化，Android 11+ 分屏场景
+
+          故意不写 android:packageNames —— 留空表示监听所有应用，
+          这是跳过任意 App 开屏广告的前提。代价是事件量大，
+          所以服务端必须做节流（见 SplashSkipService.EVENT_THROTTLE_MS）。
+
+          flagReportViewIds 是必须的：没有它拿不到 viewIdResourceName，
+          依赖 id 的规则会全部失效，而且是静默失效，很难排查。
+        -->
+        <service
+            android:name=".SplashSkipService"
+            android:exported="true"
+            android:label="@string/a11y_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <receiver
+            android:name=".ConfirmReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.splashskip.action.CONFIRM" />
+                <action android:name="com.splashskip.action.IGNORE" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+
+</manifest>

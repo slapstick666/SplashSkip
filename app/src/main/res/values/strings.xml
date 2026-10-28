@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SplashSkip</string>
+    <string name="title_rules">规则管理</string>
+    <string name="title_apps">应用设置</string>
+    <string name="title_logs">命中日志</string>
+    <string name="title_snapshots">界面快照</string>
+
+    <string name="tab_home">首页</string>
+    <string name="tab_subs">订阅</string>
+    <string name="tab_apps">应用</string>
+    <string name="tab_settings">设置</string>
+</resources>

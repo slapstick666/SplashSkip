@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      柔光玻璃风格的三个前提：
+        1. 状态栏/导航栏透明 —— 让渐变背景延伸上去，否则顶上一条死板色带
+        2. windowLightStatusBar=true —— 浅色背景下状态栏图标必须是深色，否则看不清
+        3. windowBackground 给渐变 —— 启动/转场时不至于闪白
+    -->
+    <style name="Theme.SplashSkip" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:windowBackground">@drawable/bg_aurora</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="colorPrimary">@color/brand</item>
+    </style>
+
+    <!--
+      选中项的胶囊底色。
+      Material3 默认用 secondaryContainer（淡紫），跟我们的蓝紫光斑撞色；
+      换成半透明白之后，胶囊本身也成了玻璃，跟整套视觉统一。
+    -->
+    <style name="Widget.SplashSkip.NavIndicator" parent="Widget.Material3.BottomNavigationView.ActiveIndicator">
+        <item name="android:color">#4DFFFFFF</item>
+    </style>
+</resources>

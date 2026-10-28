@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  底部导航的玻璃质感。
+  关键是**别做太实**：92% 白的时候它就是一整块白板，跟上面的玻璃卡片完全两个世界。
+  降到 75% 之后，背景的彩色光斑能从下面透上来，才跟内容区是同一套视觉语言。
+
+  顶部那条 0.5dp 的深色发丝线保留 —— 导航栏和内容区之间需要一个边界暗示，
+  纯靠颜色差异在半透明的情况下分不清。
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#BFFFFFFF" />
+        </shape>
+    </item>
+    <item
+        android:gravity="top"
+        android:height="0.5dp">
+        <shape android:shape="rectangle">
+            <solid android:color="#1F000000" />
+        </shape>
+    </item>
+</layer-list>

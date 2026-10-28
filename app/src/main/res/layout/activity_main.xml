@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  根布局加了 id=root，是为了在代码里挂 WindowInsets 监听。
+  Android 15（API 35）+ targetSdk 35 会强制 edge-to-edge，
+  内容默认会绘制到状态栏和导航栏下面，必须手动吃掉 inset，
+  否则顶部文字直接跟状态栏时钟重叠。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_aurora"
+    android:orientation="vertical">
+
+    <FrameLayout
+        android:id="@+id/fragment_container"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <com.google.android.material.bottomnavigation.BottomNavigationView
+        android:id="@+id/bottom_nav"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@drawable/bg_nav_glass"
+        app:elevation="0dp"
+        app:itemActiveIndicatorStyle="@style/Widget.SplashSkip.NavIndicator"
+        app:itemIconTint="@color/nav_item"
+        app:itemRippleColor="@color/nav_item"
+        app:itemTextColor="@color/nav_item"
+        app:itemPaddingBottom="8dp"
+        app:itemPaddingTop="8dp"
+        app:labelVisibilityMode="labeled"
+        app:menu="@menu/menu_bottom_nav" />
+
+</LinearLayout>

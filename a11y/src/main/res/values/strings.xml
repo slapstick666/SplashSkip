@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="a11y_label">开屏跳过</string>
+    <string name="a11y_summary">自动点击应用开屏广告上的「跳过」按钮</string>
+    <string name="a11y_description">用于识别并点击应用开屏页上的「跳过」按钮。服务完全离线运行，不读取、不上传任何界面内容，所有识别与点击都在本机完成。</string>
+</resources>

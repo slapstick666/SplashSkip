@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg_page">#F4F5F7</color>
+    <color name="bg_surface">#FFFFFF</color>
+    <color name="divider">#E5E7EB</color>
+    <color name="brand">#2F6FED</color>
+    <color name="text_muted">#9AA0A6</color>
+</resources>
