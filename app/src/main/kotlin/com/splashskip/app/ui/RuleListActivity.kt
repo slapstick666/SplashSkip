@@ -3,7 +3,6 @@ package com.splashskip.app.ui
 import android.os.Bundle
 import android.widget.LinearLayout
 import android.widget.TextView
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -20,11 +19,14 @@ class RuleListActivity : AppCompatActivity() {
     private lateinit var adapter: SimpleAdapter
     private lateinit var header: TextView
 
+    /** 已挂上「解析完成」回调，避免重复注册。 */
+    private var waitingRules = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         repo = RuleRepositoryProvider.get(this)
 
-        header = body("").apply { setPadding(dp(16), dp(14), dp(16), dp(10)) }
+        header = body("").apply { setPadding(dp(2), dp(2), dp(2), dp(2)) }
 
         val rv = RecyclerView(this).apply {
             layoutManager = LinearLayoutManager(this@RuleListActivity)
@@ -35,24 +37,31 @@ class RuleListActivity : AppCompatActivity() {
         adapter = SimpleAdapter(emptyList()) { item -> showDetail(item) }
         rv.adapter = adapter
 
-        setContentView(
-            LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                addView(header)
-                addView(rv)
-            },
-        )
+        val root = pageRoot("全部规则")
+        // 统计信息包一张玻璃卡：直接浮在彩色渐变上，灰字会被光斑吃掉
+        root.addView(card().apply { addView(header) })
+        root.addView(rv)
+        setContentView(root)
+        applyPageInsets(root)
         reload()
     }
 
     private fun reload() {
         val rules = repo.allRules()
         val subs = repo.listSubscriptions()
+        val sourceRules = subs.sumOf { it.sourceRuleCount }
 
         header.text = buildString {
-            append("共 ${rules.size} 条规则，来自 ${subs.size} 个订阅\n")
+            if (!repo.isReady) {
+                append("正在解析订阅规则…")
+                return@buildString
+            }
+            append("已解析 ${rules.size} 条规则")
+            if (sourceRules > rules.size) append("（订阅共 $sourceRules 条，其余解析失败）")
+            append("，当前生效 ${repo.currentIndex().size} 条")
+            append("，来自 ${subs.size} 个订阅\n")
             subs.forEach { append("· ${it.name}  v${it.version}  ${it.rules.size} 条\n") }
-            repo.lastErrors.take(3).forEach { append("⚠ $it\n") }
+            repo.lastErrors.take(2).forEach { append("⚠ $it\n") }
         }.trimEnd()
 
         adapter.submit(
@@ -61,11 +70,19 @@ class RuleListActivity : AppCompatActivity() {
                     title = rule.name,
                     subtitle = rule.packages.joinToString(", ") + "　" +
                         if (rule.activities.isEmpty()) "任意界面" else rule.activities.joinToString(" | "),
-                    badge = "GKD",
+                    badge = rule.category.ifEmpty { "GKD" },
                     payload = rule,
                 )
             },
         )
+
+        if (!repo.isReady && !waitingRules) {
+            waitingRules = true
+            repo.onReady {
+                waitingRules = false
+                runOnUiThread { if (!isFinishing) reload() }
+            }
+        }
     }
 
     private fun showDetail(item: SimpleAdapter.Item) {
@@ -85,10 +102,15 @@ class RuleListActivity : AppCompatActivity() {
             if (rule.note.isNotEmpty()) append("\n备注：${rule.note}")
         }
 
-        AlertDialog.Builder(this)
-            .setTitle(rule.name)
-            .setMessage(text)
-            .setPositiveButton("关闭", null)
+        GlassDialog.Builder(this)
+            .title(rule.name)
+            .content(
+                body(text, 11.5f).apply {
+                    setTextIsSelectable(true)
+                    setPadding(0, dp(4), 0, 0)
+                },
+            )
+            .positive("关闭")
             .show()
     }
 }

@@ -45,6 +45,14 @@ data class AppRule(
 
     /** 规则作者备注，UI 里展示，方便排查。 */
     val note: String = "",
+
+    /**
+     * 所属 GKD 分类（「开屏广告」「功能类」「局部广告」…）。
+     *
+     * 空串表示订阅没声明 categories（老订阅），这类规则一律视为启用 ——
+     * 没有分类信息就没法替用户筛，不如全放行。
+     */
+    val category: String = "",
 ) {
     fun matchesPackage(pkg: String): Boolean = packages.any { pattern ->
         when {
@@ -91,6 +99,19 @@ data class AppRule(
     }
 }
 
+/**
+ * 订阅声明的分类。
+ *
+ * GKD 用 `categories: [{key, name, enable}]` 声明这个订阅里有哪几类规则，
+ * `enable` 就是作者建议的默认开关 —— 实测 Lin-arm 订阅只有「开屏广告」是 true。
+ * 本项目的分类开关默认值直接取这个字段，等于「和 GKD 的默认行为一致」。
+ */
+data class RuleCategory(
+    val key: Int,
+    val name: String,
+    val enabledByDefault: Boolean,
+)
+
 /** 一份规则订阅包。 */
 data class Subscription(
     val id: String,
@@ -101,4 +122,12 @@ data class Subscription(
     val minEngine: Int = 1,
     val updatedAt: String = "",
     val rules: List<AppRule> = emptyList(),
+    /**
+     * 订阅原文里的分组总数与规则总数（含解析失败被跳过的）。
+     * UI 用它显示「已导入 x / 订阅共 y」，避免用户以为规则丢了。
+     */
+    val sourceGroupCount: Int = 0,
+    val sourceRuleCount: Int = 0,
+    /** 订阅声明的分类表，顺序与订阅一致。 */
+    val categories: List<RuleCategory> = emptyList(),
 )

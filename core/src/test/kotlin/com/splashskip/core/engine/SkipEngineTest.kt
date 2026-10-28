@@ -69,11 +69,12 @@ class SkipEngineTest {
     ) : EngineHost {
         var time = 0L
         var performCount = 0
+        var lastText = ""
         val hits = mutableListOf<HitRecord>()
 
         override fun currentRules() = RuleIndex.of(rules)
         override fun modeOf(pkg: String) = mode
-        override fun isConfirmed(ruleId: String) = true
+        override fun isConfirmed(pkg: String) = true
         override fun now() = time
         override fun onHit(record: HitRecord) {
             hits += record
@@ -81,6 +82,7 @@ class SkipEngineTest {
         override fun onConfirmNeeded(rule: AppRule) = Unit
         override fun perform(node: NodeSnapshot, step: Step): Boolean {
             performCount++
+            lastText = node.text
             return true
         }
     }
@@ -203,7 +205,7 @@ class SkipEngineTest {
     fun `学习模式先询问不点击`() {
         val host = FakeHost(listOf(splashRule(gkdStep("""[text*="跳过"]"""))), mode = AppMode.LEARN)
         val strictHost = object : EngineHost by host {
-            override fun isConfirmed(ruleId: String) = false
+            override fun isConfirmed(pkg: String) = false
         }
         val engine = SkipEngine(strictHost)
         val decision = engine.onWindow("com.demo.app", "com.demo.app.SplashActivity", screen) {
@@ -211,6 +213,59 @@ class SkipEngineTest {
         }
         assertTrue(decision is Decision.NeedsConfirm)
         assertEquals(0, host.performCount)
+    }
+
+    @Test
+    fun `同一界面多条规则按优先级从高到低尝试`() {
+        // 全量导入订阅后，一个 App 同一界面往往挂着「局部广告」和「开屏广告」两条规则。
+        // 开屏规则 priority=100，应该先命中「跳过」，而不是「关闭」。
+        val low = splashRule(gkdStep("""@[text="关闭"]""")).copy(id = "low", name = "局部广告", priority = 0)
+        val high = splashRule(gkdStep("""@[text="跳过"]""")).copy(id = "high", name = "开屏", priority = 100)
+        val host = FakeHost(listOf(low, high))
+        val engine = SkipEngine(host)
+
+        val decision = engine.onWindow("com.demo.app", "com.demo.app.SplashActivity", screen) {
+            listOf(textNode("关闭"), textNode("跳过"))
+        }
+        assertEquals(Decision.Skipped, decision)
+        assertEquals("应点优先级更高的开屏规则", "跳过", host.lastText)
+        assertEquals("high", host.hits.last().ruleId)
+    }
+
+    @Test
+    fun `excludeMatches 命中时该规则不生效`() {
+        // 「青少年模式」弹窗也在时必须放过 —— 这时点「跳过」是误触
+        val rule = splashRule(
+            Step(
+                gkd = GkdSelectorParser.parse("""@[text="跳过"]"""),
+                excludes = listOf(GkdSelectorParser.parse("""[text="青少年模式"]""")),
+            ),
+        )
+        val host = FakeHost(listOf(rule))
+        val engine = SkipEngine(host)
+
+        val decision = engine.onWindow("com.demo.app", "com.demo.app.SplashActivity", screen) {
+            listOf(textNode("青少年模式"), textNode("跳过"))
+        }
+        assertTrue("排除条件命中时不该点击，实际 $decision", decision !is Decision.Skipped)
+        assertEquals(0, host.performCount)
+    }
+
+    @Test
+    fun `排除条件不命中时规则正常生效`() {
+        val rule = splashRule(
+            Step(
+                gkd = GkdSelectorParser.parse("""@[text="跳过"]"""),
+                excludes = listOf(GkdSelectorParser.parse("""[text="青少年模式"]""")),
+            ),
+        )
+        val host = FakeHost(listOf(rule))
+        val engine = SkipEngine(host)
+
+        val decision = engine.onWindow("com.demo.app", "com.demo.app.SplashActivity", screen) {
+            listOf(textNode("跳过"))
+        }
+        assertEquals(Decision.Skipped, decision)
     }
 
     @Test

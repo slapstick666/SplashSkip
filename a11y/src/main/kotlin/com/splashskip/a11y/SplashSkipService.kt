@@ -211,7 +211,7 @@ class SplashSkipService : AccessibilityService(), EngineHost {
 
     override fun modeOf(pkg: String): AppMode = config.modeOf(pkg)
 
-    override fun isConfirmed(ruleId: String): Boolean = rules.isConfirmed(ruleId)
+    override fun isConfirmed(pkg: String): Boolean = rules.isConfirmed(pkg)
 
     override fun now(): Long = SystemClock.elapsedRealtime()
 

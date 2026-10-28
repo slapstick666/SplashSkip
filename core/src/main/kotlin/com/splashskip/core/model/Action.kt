@@ -37,6 +37,15 @@ data class Step(
     /** GKD 选择器 AST，运行时由 GkdMatcher 在节点树上求值。 */
     @Transient
     val gkd: GkdSelector,
+    /**
+     * GKD 的 `excludeMatches`：任一选择器在界面上命中，这一步就不生效。
+     *
+     * 语义是「这些节点存在时规则不触发」，比如 QQ 的开屏规则要排除
+     * 「青少年模式」弹窗。丢掉这个字段不是少点一次，而是在错误场景下乱点，
+     * 所以 codec 里解析不了排除条件时宁可整条规则不导入。
+     */
+    @Transient
+    val excludes: List<GkdSelector> = emptyList(),
     val action: Action = Action.CLICK_NODE,
     /** 命中后等待多久再执行（给 App 动画留时间）。 */
     val postDelayMs: Long = 0L,

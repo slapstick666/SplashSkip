@@ -7,11 +7,8 @@ import android.text.InputType
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.EditText
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.switchmaterial.SwitchMaterial
@@ -41,6 +38,9 @@ import java.util.Locale
 class SubsFragment : Fragment() {
 
     private var container: LinearLayout? = null
+
+    /** 已挂上「解析完成」回调，避免每次 render 重复注册。 */
+    private var waitingRules = false
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -79,17 +79,49 @@ class SubsFragment : Fragment() {
         val repo = RuleRepositoryProvider.get(ctx)
         val store = SubscriptionStore.get(ctx)
         val rules = repo.allRules()
+        val subs = repo.listSubscriptions()
+        val sourceRules = subs.sumOf { it.sourceRuleCount }
+        val sourceGroups = subs.sumOf { it.sourceGroupCount }
+        val cats = if (repo.isReady) repo.categoryStats() else emptyList()
+        val catsEnabledCount = cats.count { it.enabled }
 
         // ---- 概览 ----
         val overview = ctx.card()
         overview.addView(ctx.title("规则概览"))
         overview.addView(ctx.gap(4))
         overview.addRow(
-            "开屏规则",
-            "来自 GKD 订阅（已启用源），覆盖 ${rules.map { it.packages.firstOrNull() }.filterNotNull().distinct().size} 个应用",
+            "已解析规则",
+            "来自 ${subs.size} 个订阅，覆盖 ${rules.map { it.packages.firstOrNull() }.filterNotNull().distinct().size} 个应用",
             "${rules.size} 条",
         )
-        if (rules.isEmpty()) {
+        overview.addDivider()
+        overview.addRow(
+            "当前生效",
+            if (catsEnabledCount > 0) "只执行勾选的分类，见下方「规则分类」"
+            else "一个分类都没开，当前不会点击任何东西",
+            "${repo.currentIndex().size} 条",
+        )
+        if (sourceGroups > 0) {
+            overview.addDivider()
+            overview.addRow(
+                "订阅原始规模",
+                if (sourceRules > rules.size) "其余 ${sourceRules - rules.size} 条解析失败，见下方告警"
+                else "全部解析成功",
+                "$sourceRules 条 / $sourceGroups 组",
+            )
+        }
+        if (!repo.isReady) {
+            overview.addDivider()
+            overview.addView(ctx.caption("正在解析订阅…"))
+            if (!waitingRules) {
+                waitingRules = true
+                repo.onReady {
+                    waitingRules = false
+                    activity?.runOnUiThread { if (isAdded) container?.let { render(it) } }
+                }
+            }
+        }
+        if (rules.isEmpty() && repo.isReady) {
             overview.addDivider()
             overview.addView(ctx.caption(
                 "目前没有任何规则。在下方添加一个 GKD 订阅源（如 " +
@@ -98,6 +130,33 @@ class SubsFragment : Fragment() {
             ))
         }
         col.addView(overview)
+
+        // ---- 分类开关 ----
+        if (cats.isNotEmpty()) {
+            val catCard = ctx.card()
+            catCard.addView(ctx.title("规则分类"))
+            catCard.addView(ctx.gap(4))
+            catCard.addView(ctx.caption(
+                "订阅里的规则按 GKD 的分类分组，只有勾选的分类会真的去点。" +
+                    "默认只开订阅作者标为启用的那一类 —— 全开会在你正常刷信息流、" +
+                    "点设置的时候自动动手。",
+                11.5f,
+            ))
+            catCard.addView(ctx.gap(2))
+            cats.forEachIndexed { i, stat ->
+                if (i > 0) catCard.addDivider()
+                val row = catCard.addRow(stat.name, "${stat.ruleCount} 条")
+                row.addView(SwitchMaterial(ctx).apply {
+                    isChecked = stat.enabled
+                    setOnCheckedChangeListener { _, checked ->
+                        if (checked == stat.enabled) return@setOnCheckedChangeListener
+                        RuleRepositoryProvider.get(ctx).setCategoryEnabled(stat.name, checked)
+                        container?.let { render(it) }
+                    }
+                })
+            }
+            col.addView(catCard)
+        }
 
         // ---- 订阅源 ----
         val subsCard = ctx.card()
@@ -113,9 +172,12 @@ class SubsFragment : Fragment() {
         if (entries.isEmpty()) {
             subsCard.addView(ctx.caption("还没有添加远程订阅。点下方按钮填一个 URL 就能加。"))
         } else {
+            val loadedById = subs.associateBy { it.id }
             entries.forEachIndexed { i, e ->
                 if (i > 0) subsCard.addDivider()
-                val (title, subtitle, badge) = describe(ctx, e)
+                // 优先用实际解析出来的条数，entry.ruleCount 是上次拉取时写的，
+                // 老用户升级到全量导入后这个数字还是旧的
+                val (title, subtitle, badge) = describe(ctx, e, loadedById[e.id]?.rules?.size)
                 subsCard.addRow(title, subtitle, badge) { showActions(e) }
             }
         }
@@ -154,16 +216,25 @@ class SubsFragment : Fragment() {
             val warnCard = ctx.card()
             warnCard.addView(ctx.title("解析告警", 14f))
             warnCard.addView(ctx.gap(4))
+            warnCard.addView(ctx.caption(
+                if (errs.size > 8) "共 ${errs.size} 条，只列前 8 条" else "共 ${errs.size} 条",
+                11f,
+            ))
             errs.take(8).forEach { warnCard.addView(ctx.caption("· $it", 11f)) }
             col.addView(warnCard)
         }
     }
 
-    private fun describe(ctx: Context, e: SubscriptionEntry): Triple<String, String, String> {
+    private fun describe(
+        ctx: Context,
+        e: SubscriptionEntry,
+        actualCount: Int? = null,
+    ): Triple<String, String, String> {
         val title = e.displayName
+        val count = actualCount ?: e.ruleCount
         val subtitle = buildString {
             if (e.version > 0) append("v").append(e.version).append("　")
-            if (e.ruleCount > 0) append(e.ruleCount).append(" 条　")
+            if (count > 0) append(count).append(" 条　")
             if (e.lastFetchAt > 0) {
                 append("更新于 ")
                 append(SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(e.lastFetchAt)))
@@ -187,9 +258,9 @@ class SubsFragment : Fragment() {
             "编辑",
             "删除",
         )
-        AlertDialog.Builder(ctx)
-            .setTitle(entry.displayName)
-            .setItems(items) { _, which ->
+        GlassDialog.Builder(ctx)
+            .title(entry.displayName)
+            .items(items.toList()) { which ->
                 when (which) {
                     0 -> syncNow(entry)
                     1 -> {
@@ -229,16 +300,16 @@ class SubsFragment : Fragment() {
 
     private fun confirmDelete(entry: SubscriptionEntry) {
         val ctx = requireContext()
-        AlertDialog.Builder(ctx)
-            .setTitle("删除订阅")
-            .setMessage("将从列表中移除「${entry.displayName}」，并删除本地缓存的那份规则。\n\n其他订阅和内置规则不受影响。")
-            .setPositiveButton("删除") { _, _ ->
+        GlassDialog.Builder(ctx)
+            .title("删除订阅")
+            .message("将从列表中移除「${entry.displayName}」，并删除本地缓存的那份规则。\n\n其他订阅和内置规则不受影响。")
+            .negative("取消")
+            .positive("删除") {
                 SubscriptionStore.get(ctx).remove(entry.id)
                 RuleRepositoryProvider.get(ctx).removeRemote(entry.id)
                 toast("已删除 ${entry.displayName}")
                 container?.let { render(it) }
             }
-            .setNegativeButton("取消", null)
             .show()
     }
 
@@ -246,22 +317,20 @@ class SubsFragment : Fragment() {
 
     private fun showAddDialog() {
         val ctx = requireContext()
-        val pad = ctx.dp(20)
 
-        val urlInput = EditText(ctx).apply {
-            hint = "https://example.com/rules.json"
+        val urlInput = ctx.input("https://example.com/rules.json").apply {
             inputType = InputType.TYPE_TEXT_VARIATION_URI
             setSingleLine()
         }
-        val checkInput = EditText(ctx).apply {
-            hint = "可选，返回纯文本版本号"
+        val checkInput = ctx.input("可选，返回纯文本版本号").apply {
             inputType = InputType.TYPE_TEXT_VARIATION_URI
             setSingleLine()
         }
 
+        // 内边距交给 GlassDialog 的玻璃卡片，这里只排内容
         val body = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(pad, ctx.dp(8), pad, 0)
+            setPadding(0, ctx.dp(2), 0, 0)
             addView(ctx.caption("订阅 URL"))
             addView(urlInput)
             addView(ctx.gap(12))
@@ -271,18 +340,19 @@ class SubsFragment : Fragment() {
             addView(ctx.caption(
                 "填 GKD 格式的订阅地址，例如：\n" +
                     "gcore.jsdelivr.net/gh/Lin-arm/GKD_subscription@main/dist/gkd.json5\n\n" +
-                    "只会导入其中的「开屏广告」分类规则，其余分类（更新提示、青少年模式等）" +
-                    "不动 —— 那些弹窗可能是你想看的。",
+                    "订阅里的全部分类都会导入（开屏广告、全屏广告、局部广告、更新提示等）。" +
+                    "开屏分类的规则优先级更高，会先于其它分类尝试；非开屏规则会在对应界面" +
+                    "自动点击，误点风险比只导开屏高。",
             ))
         }
 
-        AlertDialog.Builder(ctx)
-            .setTitle("添加 GKD 订阅")
-            .setView(ScrollView(ctx).apply { addView(body) })
-            .setPositiveButton("添加") { _, _ ->
+        GlassDialog.Builder(ctx)
+            .title("添加 GKD 订阅")
+            .content(body)
+            .negative("取消")
+            .positive("添加") {
                 doAdd(urlInput.text.toString(), checkInput.text.toString())
             }
-            .setNegativeButton("取消", null)
             .show()
     }
 
@@ -297,10 +367,10 @@ class SubsFragment : Fragment() {
                 toast("已添加「${entry.displayName}」，${entry.ruleCount} 条规则")
                 container?.let { render(it) }
             } else {
-                AlertDialog.Builder(ctx)
-                    .setTitle("添加失败")
-                    .setMessage(err ?: "未知错误")
-                    .setPositiveButton("知道了", null)
+                GlassDialog.Builder(ctx)
+                    .title("添加失败")
+                    .message(err ?: "未知错误")
+                    .positive("知道了")
                     .show()
             }
         }
@@ -310,22 +380,19 @@ class SubsFragment : Fragment() {
 
     private fun showEditDialog(entry: SubscriptionEntry) {
         val ctx = requireContext()
-        val pad = ctx.dp(20)
 
-        val nameInput = EditText(ctx).apply {
-            hint = "订阅名称"
+        val nameInput = ctx.input("订阅名称").apply {
             setText(entry.name)
             setSingleLine()
         }
-        val checkInput = EditText(ctx).apply {
-            hint = "可选，返回纯文本版本号"
+        val checkInput = ctx.input("可选，返回纯文本版本号").apply {
             setText(entry.checkUrl ?: "")
             inputType = InputType.TYPE_TEXT_VARIATION_URI
             setSingleLine()
         }
         val body = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(pad, ctx.dp(8), pad, 0)
+            setPadding(0, ctx.dp(2), 0, 0)
             addView(ctx.caption("名称"))
             addView(nameInput)
             addView(ctx.gap(12))
@@ -336,10 +403,11 @@ class SubsFragment : Fragment() {
             addView(ctx.body(entry.updateUrl, 12f).apply { setPadding(0, ctx.dp(4), 0, 0) })
         }
 
-        AlertDialog.Builder(ctx)
-            .setTitle("编辑订阅")
-            .setView(ScrollView(ctx).apply { addView(body) })
-            .setPositiveButton("保存") { _, _ ->
+        GlassDialog.Builder(ctx)
+            .title("编辑订阅")
+            .content(body)
+            .negative("取消")
+            .positive("保存") {
                 val updated = entry.copy(
                     name = nameInput.text.toString().trim(),
                     checkUrl = checkInput.text.toString().trim().ifEmpty { null },
@@ -348,7 +416,6 @@ class SubsFragment : Fragment() {
                 toast("已保存")
                 container?.let { render(it) }
             }
-            .setNegativeButton("取消", null)
             .show()
     }
 

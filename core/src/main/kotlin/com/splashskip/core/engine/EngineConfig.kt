@@ -61,7 +61,14 @@ fun interface HitLogger {
 interface EngineHost {
     fun currentRules(): RuleIndex
     fun modeOf(pkg: String): AppMode
-    fun isConfirmed(ruleId: String): Boolean
+
+    /**
+     * 学习模式下这个 App 是否已被用户授权自动跳。
+     *
+     * 粒度是**包名**不是规则 id：全量导入订阅后一个 App 有十几条规则，
+     * 逐条确认等于弹十几次窗。
+     */
+    fun isConfirmed(pkg: String): Boolean
     fun now(): Long
     fun onHit(record: HitRecord)
     fun onConfirmNeeded(rule: AppRule)

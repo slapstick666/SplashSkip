@@ -16,7 +16,6 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
 import androidx.core.widget.addTextChangedListener
 import androidx.fragment.app.Fragment
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -255,9 +254,9 @@ class AppsFragment : Fragment() {
         )
         val labels = modes.map { (m, label) -> if (m == current) "✓ $label" else "　 $label" }
 
-        AlertDialog.Builder(ctx)
-            .setTitle(entry.label)
-            .setItems(labels.toTypedArray()) { _, which ->
+        GlassDialog.Builder(ctx)
+            .title(entry.label)
+            .items(labels) { which ->
                 config.setMode(entry.pkg, modes[which].first)
                 render()
             }
@@ -317,7 +316,11 @@ class AppsFragment : Fragment() {
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         return runCatching {
             ctx.packageManager
-                .queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
+                // flags 必须传 0，不能用 MATCH_DEFAULT_ONLY：
+                // 后者只返回声明了 CATEGORY_DEFAULT 的 Activity，而桌面图标
+                // （CATEGORY_LAUNCHER）的 intent-filter 通常不带 DEFAULT，
+                // 会被整批静默滤掉，导致真机上「显示不全」。
+                .queryIntentActivities(intent, 0)
                 .mapNotNull { it.activityInfo?.applicationInfo }
                 .distinctBy { it.packageName }
                 .filter { it.packageName != ctx.packageName }

@@ -24,7 +24,7 @@ class LogActivity : AppCompatActivity() {
         val store = HitLogStore.get(this)
         val records = store.tail(300)
 
-        val summary = body("").apply { setPadding(dp(16), dp(14), dp(16), dp(10)) }
+        val summary = body("").apply { setPadding(dp(2), dp(2), dp(2), dp(2)) }
         summary.text = if (records.isEmpty()) {
             "还没有任何记录。\n\n开启无障碍服务后，打开任意带开屏广告的 App，这里会记录每一次匹配。"
         } else {
@@ -53,20 +53,31 @@ class LogActivity : AppCompatActivity() {
 
         val actions = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(12), 0, dp(12), dp(12))
-            addView(action("清空日志") {
-                store.clear()
-                recreate()
-            })
+            setPadding(dp(14), dp(8), dp(14), dp(12))
+            addView(
+                action("清空日志") { confirmClear(store) },
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+            )
         }
 
-        setContentView(
-            LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                addView(summary)
-                addView(rv)
-                addView(actions)
-            },
-        )
+        val root = pageRoot("命中日志")
+        root.addView(card().apply { addView(summary) })
+        root.addView(rv)
+        root.addView(actions)
+        setContentView(root)
+        applyPageInsets(root, actions)
+    }
+
+    /** 清空是不可恢复的，必须先问一句 —— 原来点一下就清，误触代价太大。 */
+    private fun confirmClear(store: HitLogStore) {
+        GlassDialog.Builder(this)
+            .title("清空命中日志？")
+            .message("会删除全部命中记录，不可恢复。")
+            .negative("取消")
+            .positive("清空") {
+                store.clear()
+                recreate()
+            }
+            .show()
     }
 }

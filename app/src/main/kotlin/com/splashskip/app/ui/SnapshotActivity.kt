@@ -5,7 +5,6 @@ import android.os.Bundle
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -34,7 +33,7 @@ class SnapshotActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         store = SnapshotStore(this)
 
-        header = body("").apply { setPadding(dp(16), dp(14), dp(16), dp(10)) }
+        header = body("").apply { setPadding(dp(2), dp(2), dp(2), dp(2)) }
 
         val rv = RecyclerView(this).apply {
             layoutManager = LinearLayoutManager(this@SnapshotActivity)
@@ -49,18 +48,19 @@ class SnapshotActivity : AppCompatActivity() {
 
         val actions = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(12), 0, dp(12), dp(12))
-            addView(action("清空全部") { confirmClear() })
+            setPadding(dp(14), dp(8), dp(14), dp(12))
+            addView(
+                action("清空全部") { confirmClear() },
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+            )
         }
 
-        setContentView(
-            LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                addView(header)
-                addView(rv)
-                addView(actions)
-            },
-        )
+        val root = pageRoot("界面快照")
+        root.addView(card().apply { addView(header) })
+        root.addView(rv)
+        root.addView(actions)
+        setContentView(root)
+        applyPageInsets(root, actions)
         reload()
     }
 
@@ -115,15 +115,15 @@ class SnapshotActivity : AppCompatActivity() {
             text = shown
             textSize = 10f
             typeface = Typeface.MONOSPACE
-            setPadding(dp(12), dp(12), dp(12), dp(12))
+            setTextColor(0xFF3C3C43.toInt())
             setTextIsSelectable(true)
         }
 
-        AlertDialog.Builder(this)
-            .setTitle(file.name)
-            .setView(ScrollView(this).apply { addView(textView) })
-            .setPositiveButton("关闭", null)
-            .setNeutralButton("删除") { _, _ ->
+        GlassDialog.Builder(this)
+            .title(file.name)
+            .content(textView)
+            .positive("关闭")
+            .neutral("删除") {
                 store.delete(file)
                 reload()
             }
@@ -131,14 +131,14 @@ class SnapshotActivity : AppCompatActivity() {
     }
 
     private fun confirmClear() {
-        AlertDialog.Builder(this)
-            .setTitle("清空全部快照？")
-            .setMessage("会删除所有已保存的节点树文件，不可恢复。")
-            .setPositiveButton("清空") { _, _ ->
+        GlassDialog.Builder(this)
+            .title("清空全部快照？")
+            .message("会删除所有已保存的节点树文件，不可恢复。")
+            .negative("取消")
+            .positive("清空") {
                 store.clear()
                 reload()
             }
-            .setNegativeButton("取消", null)
             .show()
     }
 

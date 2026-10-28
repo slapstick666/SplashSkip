@@ -33,8 +33,100 @@ object GkdSelectorParser {
 
     fun parse(source: String): GkdSelector = SelectorParser(source).parseSelector()
 
+    /**
+     * 解析一条可能含顶层 `||` 的选择器。
+     *
+     * GKD 允许 `(A) || (B)` 表示两条链任一命中即可（订阅里实测 5 处）。
+     * 本项目的 AST 是「一条链」，所以这里按顶层 `||` 拆成多条独立的链，
+     * 由调用方展开成多个 step —— 引擎本来就是「按顺序尝试、第一个命中生效」，
+     * 天然就是 OR 语义，不需要把 AST 改成表达式树。
+     *
+     * 拆分只认括号深度为 0 的 `||`，`[text="a" || text="b"]` 这种属性级
+     * 的或仍由 parseExpr 处理，不会被切碎。
+     */
+    fun parseAll(source: String): List<GkdSelector> {
+        val parts = splitTopLevelOr(source)
+        if (parts.isEmpty()) throw GkdParseException("选择器为空")
+        return parts.map { parse(stripOuterParens(it)) }
+    }
+
     /** 解析失败时返回 null，供「尽力而为」的批量场景使用。 */
     fun parseOrNull(source: String): GkdSelector? = runCatching { parse(source) }.getOrNull()
+
+    /** 同上，但支持顶层 `||`。 */
+    fun parseAllOrNull(source: String): List<GkdSelector>? =
+        runCatching { parseAll(source) }.getOrNull()
+
+    /**
+     * 按顶层 `||` 切分。字符串字面量与 `[...]` / `(...)` 内部的 `||` 不切。
+     */
+    private fun splitTopLevelOr(source: String): List<String> {
+        val out = mutableListOf<String>()
+        var depth = 0
+        var quote: Char? = null
+        var start = 0
+        var i = 0
+        while (i < source.length) {
+            val c = source[i]
+            if (quote != null) {
+                when {
+                    c == '\\' -> i++
+                    c == quote -> quote = null
+                }
+                i++
+                continue
+            }
+            when (c) {
+                '\'', '"', '`' -> quote = c
+                '(', '[' -> depth++
+                ')', ']' -> if (depth > 0) depth--
+                '|' -> if (depth == 0 && i + 1 < source.length && source[i + 1] == '|') {
+                    out.add(source.substring(start, i))
+                    i += 2
+                    start = i
+                    continue
+                }
+            }
+            i++
+        }
+        out.add(source.substring(start))
+        return out.map { it.trim() }.filter { it.isNotEmpty() }
+    }
+
+    /**
+     * 去掉整体包裹的括号：`([a] > [b])` → `[a] > [b]`。
+     * 只去掉「首尾配对、且中间没有提前闭合」的那种，`([a]) > ([b])` 不动。
+     */
+    private fun stripOuterParens(raw: String): String {
+        var t = raw.trim()
+        while (t.length >= 2 && t.first() == '(' && t.last() == ')' && wrapsWhole(t)) {
+            t = t.substring(1, t.length - 1).trim()
+        }
+        return t
+    }
+
+    private fun wrapsWhole(t: String): Boolean {
+        var depth = 0
+        var quote: Char? = null
+        for (i in t.indices) {
+            val c = t[i]
+            if (quote != null) {
+                if (c == '\\') continue
+                if (c == quote) quote = null
+                continue
+            }
+            when (c) {
+                '\'', '"', '`' -> quote = c
+                '(', '[' -> depth++
+                ')', ']' -> {
+                    depth--
+                    // 第一个字符的配平括号出现在末尾之前 → 不是整体包裹
+                    if (depth == 0 && i != t.lastIndex) return false
+                }
+            }
+        }
+        return depth == 0
+    }
 
     private class SelectorParser(private val s: String) {
         private var i = 0
@@ -50,7 +142,28 @@ object GkdSelectorParser {
             while (true) {
                 chain.add(parseAttr(chain.size))
                 skipWs()
-                val op = peekRelationOp() ?: break
+                val op = peekRelationOp()
+                if (op == null) {
+                    // 省略关系算符时按官方简写规则当作 `>n`：
+                    // `A B` ≡ `A >n B`（A 是 B 的任意深度祖先）。
+                    // 订阅里 `ViewFactoryHolder FrameLayout[...]` 这种写法很常见，
+                    // 不认就会整条丢掉。
+                    if (looksLikeAttrStart()) {
+                        relations.add(
+                            GkdRelation(
+                                GkdRelOp.ANCESTOR,
+                                GkdOffsets(infinite = true, start = 1, step = 1),
+                            ),
+                        )
+                        continue
+                    }
+                    break
+                }
+                if (startsWith("->")) {
+                    // `->` 是「回到已查询过的节点重新展开」，需要保存查询路径，
+                    // 当前的从右往左回溯模型表达不了，明确报错而不是解析成 `-` + `>`。
+                    fail("暂不支持 `->` 关系算符")
+                }
                 i += op.text.length
                 val offsets = parseOffsets()
                 relations.add(GkdRelation(op, offsets))
@@ -93,15 +206,19 @@ object GkdSelectorParser {
                 skipWs()
                 expect(')')
                 if (at) {
-                    if (targetIndex >= 0) fail("一条选择器里出现了多个 @ 标记")
+                    // 同上：多个 @ 时最后一个生效
                     targetIndex = chainPos
                 }
                 return GkdAttr(null, e)
             }
 
-            // 多个 [] 组之间是 && 的关系
+            // 多个 [] 组之间是 && 的关系。组与组之间允许有空白 ——
+            // 真实订阅里 `[vid="fl_main"] [vid="img_close"]` 这种写法很常见，
+            // 不跳过空白就会把后半截当成「解析不了的关系算符」整条丢掉。
             var cond: GkdExpr? = null
-            while (peek() == '[') {
+            while (true) {
+                skipWs()
+                if (peek() != '[') break
                 i++
                 skipWs()
                 val e = parseExpr()
@@ -114,7 +231,7 @@ object GkdSelectorParser {
                 fail("属性选择器既没有类名也没有属性条件")
             }
             if (at) {
-                if (targetIndex >= 0) fail("一条选择器里出现了多个 @ 标记")
+                // GKD 里多个 @ 时最后一个生效，不是语法错误
                 targetIndex = chainPos
             }
             return GkdAttr(className, cond)
@@ -305,6 +422,13 @@ object GkdSelectorParser {
 
         // ---------------- 关系算符 ----------------
 
+        /** 下一个 token 是否像一个新的属性选择器（用于识别省略的关系算符）。 */
+        private fun looksLikeAttrStart(): Boolean {
+            if (atEnd()) return false
+            val c = peek()
+            return c == '@' || c == '*' || c == '[' || c == '(' || isIdentStart(c)
+        }
+
         /** `<<` 必须排在 `<` 前面，否则会被解析成 `<` 加一个 `<`。 */
         private fun peekRelationOp(): GkdRelOp? {
             if (startsWith("<<")) return GkdRelOp.DESCENDANT
@@ -466,10 +590,12 @@ object GkdSelectorParser {
         // 标识符按官方定义：^[_a-zA-Z][a-zA-Z0-9_]*$
         // 刻意不含 '$' —— 否则 `text$="x"` 里的 '$' 会被吞进标识符，
         // 比较运算符就再也认不出来了。
+        // 也刻意不用 isLetter()：那会把中文文本当成合法类名，
+        // `这段不是选择器` 会被静默解析成「类名匹配」，垃圾进垃圾出更难排查。
         private fun isIdentStart(c: Char): Boolean =
-            c == '_' || c.isLetter()
+            c == '_' || (c in 'a'..'z') || (c in 'A'..'Z')
 
         private fun isIdentPart(c: Char): Boolean =
-            c == '_' || c.isLetterOrDigit()
+            isIdentStart(c) || (c in '0'..'9')
     }
 }

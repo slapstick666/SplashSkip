@@ -5,6 +5,7 @@ import com.splashskip.core.gkd.Json5
 import com.splashskip.core.model.Action
 import com.splashskip.core.model.AppRule
 import com.splashskip.core.model.GkdSelector
+import com.splashskip.core.model.RuleCategory
 import com.splashskip.core.model.Step
 import com.splashskip.core.model.Subscription
 
@@ -23,22 +24,32 @@ data class ParseResult(
  * GKD 订阅是 JSON5，选择器是树形关系表达式（`@A > B - C << D`）。
  * 本项目唯一支持的规则来源就是 GKD 订阅：这里把 GKD 的规则翻译成
  * AppRule/Step，Step.gkd 里装解析好的选择器 AST，由 GkdMatcher 在运行时求值。
- * 1.2.0 之前还有一套自研的扁平 JSON 规则格式，已删 —— GKD 生态里现成
- * 有几千条社区维护的规则，自造格式的维护成本远大于收益。
  *
- * ## 只导入开屏相关分类
+ * ## 为什么全量导入
  *
- * GKD 订阅里除了「开屏广告」还有「更新提示」「青少年模式」「全屏广告-弹窗广告」
- * 等分类。后几类关掉的可能是用户**想看**的东西（比如更新弹窗），
- * 自动关掉属于越权。所以默认只导入名称含「开屏」的分组。
+ * 1.2.x 早期版本只导「开屏广告」分类（299 条 / 179 个 App），理由是
+ * 「更新提示、评价提示这些弹窗可能是用户想看的」。但实际用下来，
+ * 用户要的是「和 GKD 一样」：订阅里有什么就该有什么，GKD 的 categories
+ * 里本来就带 `enable` 开关，那是 GKD 的默认启用策略，不该由本 App 替用户
+ * 砍掉 92% 的规则。
  *
- * 整个订阅 3907 条规则里，开屏相关只有 299 条、覆盖 179 个 App。
- * 少导入 92% 的规则，既省内存又降低误点风险。
+ * 所以现在全量导入 apps[].groups[] 与 globalGroups[]，一个分组一个分类的
+ * 概念只保留在 note 和告警文案里。开屏分类的规则优先（priority=100），
+ * 保证开屏页上先试「跳过」而不是「关闭广告」。
+ *
+ * ## 真实的解析损耗
+ *
+ * 整个订阅 3880 条规则 / 4115 条选择器，选择器解析成功率约 99.7%，
+ * 剩下的 0.3% 用了 `->` 算符（需要记住查询路径，当前回溯模型表达不了）。
+ * 解析失败的规则会跳过并在订阅页列出告警，不影响其余规则。
  */
 object GkdCodec {
 
-    /** 只导入分组名里包含这些关键字的规则。 */
-    private val CATEGORY_KEYWORDS = listOf("开屏")
+    /** 开屏分类的优先级，保证开屏页优先试「跳过」而不是「关闭广告」。 */
+    private const val PRIORITY_SPLASH = 100
+
+    /** 开屏分类名，同时也是默认唯一启用的分类。 */
+    const val SPLASH_CATEGORY = "开屏广告"
 
     /** GKD 的 action 到本项目 Action 的映射。 */
     private fun mapAction(raw: String?): Action? = when (raw?.lowercase()) {
@@ -71,14 +82,15 @@ object GkdCodec {
         val warnings = mutableListOf<String>()
         val rules = ArrayList<AppRule>()
         // 规则 id 必须全局唯一：仓库用 id 作 Map 的键去重，撞 id 的规则会被静默覆盖。
-        // GKD 里同一个分组的 rule key 并不保证唯一（实测真实订阅里就有 1 组冲突），
+        // GKD 里同一个分组的 rule key 并不保证唯一（实测真实订阅里就有冲突），
         // 所以这里显式做去重，冲突的追加 #2、#3 后缀。
         val usedIds = HashSet<String>()
+        val stats = Stats()
+        val categories = parseCategories(root)
 
         // ---- App 自己的分组 ----
         @Suppress("UNCHECKED_CAST")
         val apps = root["apps"] as? List<Map<String, Any?>> ?: emptyList()
-        var skippedApps = 0
         for (app in apps) {
             val pkg = app["id"] as? String
             if (pkg.isNullOrBlank()) continue
@@ -86,12 +98,16 @@ object GkdCodec {
             @Suppress("UNCHECKED_CAST")
             val groups = app["groups"] as? List<Map<String, Any?>> ?: continue
             for (group in groups) {
-                val gname = group["name"] as? String ?: ""
-                if (!isWantedCategory(gname)) {
-                    skippedApps++
-                    continue
-                }
-                rules += parseGroup(pkg, appName, group, warnings, usedIds)
+                stats.groups++
+                rules += parseGroup(
+                    pkg = pkg,
+                    appName = appName,
+                    group = group,
+                    warnings = warnings,
+                    usedIds = usedIds,
+                    stats = stats,
+                    categories = categories,
+                )
             }
         }
 
@@ -100,8 +116,7 @@ object GkdCodec {
         @Suppress("UNCHECKED_CAST")
         val globalGroups = root["globalGroups"] as? List<Map<String, Any?>> ?: emptyList()
         for (group in globalGroups) {
-            val gname = group["name"] as? String ?: ""
-            if (!isWantedCategory(gname)) continue
+            stats.groups++
             val excluded = excludedPackages(group)
             rules += parseGroup(
                 pkg = null,
@@ -110,18 +125,22 @@ object GkdCodec {
                 warnings = warnings,
                 excludedPackages = excluded,
                 usedIds = usedIds,
+                stats = stats,
+                categories = categories,
             )
         }
 
         if (rules.isEmpty()) {
             return ParseResult(
                 null,
-                warnings + "GKD 订阅里没有找到开屏广告相关的规则（已跳过 ${skippedApps} 个其它分类的分组）",
-                "GKD 订阅中没有可用的开屏规则",
+                warnings,
+                "GKD 订阅中没有可用的规则（共 ${stats.total} 条，全部解析失败）",
             )
         }
 
         val subId = "gkd-${root["id"] ?: root["name"] ?: "subscription"}"
+        val appCount = rules.mapNotNull { r -> r.packages.firstOrNull()?.takeIf { it != "*" } }
+            .distinct().size
         return ParseResult(
             Subscription(
                 id = subId,
@@ -130,13 +149,54 @@ object GkdCodec {
                 minEngine = 1,
                 updatedAt = "",
                 rules = rules,
+                sourceGroupCount = stats.groups,
+                sourceRuleCount = stats.total,
+                categories = categories,
             ),
-            warnings + "已导入开屏规则 ${rules.size} 条（订阅中其余 ${skippedApps} 个分组未导入）",
+            warnings + "已导入 ${rules.size} 条规则，覆盖 $appCount 个应用" +
+                if (stats.skipped > 0) "，跳过 ${stats.skipped} 条（详见告警）" else "",
         )
     }
 
-    private fun isWantedCategory(groupName: String): Boolean =
-        CATEGORY_KEYWORDS.any { groupName.contains(it) }
+    /** 解析过程中的计数，用于在告警里给出「总共多少、丢了多少」。 */
+    private class Stats {
+        var total = 0
+        var groups = 0
+        var skipped = 0
+        var duplicateIds = 0
+    }
+
+    /**
+     * 读订阅顶层声明的分类表。
+     *
+     * GKD 的 group 没有 categories 字段，分类靠「分组名以分类名开头」这条约定
+     * （实测 2477 个分组 100% 能匹配上）。所以分类表只在这里读一次，
+     * 后面靠 [categoryOf] 按名字前缀反查。
+     */
+    private fun parseCategories(root: Map<*, *>): List<RuleCategory> {
+        val raw = root["categories"] as? List<*> ?: return emptyList()
+        return raw.mapNotNull { it as? Map<*, *> }.mapNotNull { c ->
+            val name = c["name"] as? String ?: return@mapNotNull null
+            RuleCategory(
+                key = (c["key"] as? Number)?.toInt() ?: 0,
+                name = name,
+                enabledByDefault = c["enable"] == true,
+            )
+        }
+    }
+
+    /**
+     * 按分组名反查分类。取最长匹配 —— 「开屏广告」和「开屏广告-全局」
+     * 这种前缀重叠的情况，长名优先才对。
+     */
+    private fun categoryOf(groupName: String, categories: List<RuleCategory>): String {
+        if (categories.isEmpty()) return ""
+        return categories
+            .filter { groupName == it.name || groupName.startsWith(it.name + "-") }
+            .maxByOrNull { it.name.length }
+            ?.name
+            ?: "其他"
+    }
 
     /** globalGroups[].apps 里 enable=false 的就是排除名单。 */
     private fun excludedPackages(group: Map<String, Any?>): Set<String> {
@@ -158,27 +218,99 @@ object GkdCodec {
         group: Map<String, Any?>,
         warnings: MutableList<String>,
         excludedPackages: Set<String> = emptySet(),
-        usedIds: MutableSet<String> = HashSet(),
+        usedIds: MutableSet<String>,
+        stats: Stats,
+        categories: List<RuleCategory> = emptyList(),
     ): List<AppRule> {
         val out = ArrayList<AppRule>()
+        // 订阅作者显式关闭的分组（实测有 4 个「请移步到另一个应用页」的占位规则）不导
+        if (group["enable"] == false) return out
+
         val groupName = group["name"] as? String ?: ""
         val groupKey = group["key"]?.toString() ?: "0"
         val groupActivityIds = stringList(group["activityIds"])
         val groupMatchTime = (group["matchTime"] as? Number)?.toLong()
         val groupActionMax = (group["actionMaximum"] as? Number)?.toInt()
+        val category = categoryOf(groupName, categories)
+        // 老订阅没有 categories 表，退回按分组名判断，开屏规则照样享受优先级加成
+        val isSplash = category == SPLASH_CATEGORY ||
+            (category.isEmpty() && groupName.contains(SPLASH_CATEGORY))
 
-        @Suppress("UNCHECKED_CAST")
-        val rules = group["rules"] as? List<Map<String, Any?>> ?: return out
+        val rawRules = group["rules"]
+        val rawList = rawRules as? List<*>
+        if (rawRules != null && rawList == null) {
+            // 真实订阅里有二十多个分组把 rules 写成了空串或对象，属于订阅侧的脏数据
+            warnings.add("分组「$groupName」的 rules 不是数组，已跳过整个分组")
+            return out
+        }
+        // 泛型擦除后 `as? List<Map<..>>` 不校验元素类型，必须逐个判 ——
+        // 订阅里确实存在 rules: ['...'] 这种元素是字符串的分组
+        val rules = rawList.orEmpty().mapNotNull { it as? Map<String, Any?> }
+        if (rawList != null && rules.size < rawList.size) {
+            warnings.add("分组「$groupName」有 ${rawList.size - rules.size} 条规则不是对象，已跳过")
+        }
 
         for ((index, rule) in rules.withIndex()) {
+            stats.total++
             val ruleKey = rule["key"]?.toString() ?: index.toString()
             val baseId = if (pkg != null) {
                 "gkd:$pkg:$groupKey:$ruleKey"
             } else {
                 "gkd:global:$groupKey:$ruleKey"
             }
-            // GKD 的 rule key 不保证唯一，撞 id 的规则在仓库里会被静默覆盖，
-            // 所以这里显式加后缀区分开，宁可 id 难看也不能丢规则。
+
+            if (pkg != null && pkg in excludedPackages) continue
+
+            // excludeMatches 的语义是「这些节点存在时规则不生效」。解析不了就整条放弃 ——
+            // 少了排除条件会在明确不该点的界面上乱点，比少一条规则危险得多。
+            val excludes = mutableListOf<GkdSelector>()
+            var excludeBroken = false
+            for (text in stringList(rule["excludeMatches"])) {
+                val parsed = GkdSelectorParser.parseAllOrNull(text)
+                if (parsed == null) {
+                    excludeBroken = true
+                    warnings.add("规则 $baseId 的排除条件无法解析：${text.take(40)}")
+                    break
+                }
+                excludes += parsed
+            }
+            if (excludeBroken) {
+                stats.skipped++
+                continue
+            }
+
+            val selectors = mutableListOf<GkdSelector>()
+            for (text in stringList(rule["matches"]) + stringList(rule["anyMatches"])) {
+                val parsed = GkdSelectorParser.parseAllOrNull(text)
+                if (parsed == null) {
+                    // 带上失败原因，用户看到「暂不支持 `->` 算符」比只看到半截选择器有用
+                    val reason = runCatching { GkdSelectorParser.parseAll(text) }
+                        .exceptionOrNull()?.message
+                        ?.substringAfter("处：", "")
+                        ?.take(24)
+                        ?.takeIf { it.isNotBlank() }
+                    warnings.add(
+                        "规则 $baseId 的选择器无法解析" +
+                            (reason?.let { "（$it）" } ?: "") +
+                            "：${text.take(40)}",
+                    )
+                    continue
+                }
+                selectors += parsed
+            }
+            if (selectors.isEmpty()) {
+                stats.skipped++
+                continue
+            }
+
+            val action = mapAction(rule["action"] as? String)
+            if (action == null) {
+                warnings.add("规则 $baseId 的动作 ${rule["action"]} 不支持，已跳过")
+                stats.skipped++
+                continue
+            }
+
+            // 校验都过了才占用 id，避免被跳过的规则白占一个后缀
             var ruleId = baseId
             var dup = 2
             while (!usedIds.add(ruleId)) {
@@ -186,33 +318,8 @@ object GkdCodec {
                 dup++
             }
             if (ruleId != baseId) {
+                stats.duplicateIds++
                 warnings.add("规则 $baseId 出现重复 id，已改用 $ruleId")
-            }
-
-            if (pkg != null && pkg in excludedPackages) continue
-
-            // excludeMatches 的语义是「这些节点存在时规则不生效」，本项目的 Step 模型
-            // 没有排除位，硬塞会误点，所以整条规则放弃。
-            if (rule["excludeMatches"] != null) {
-                warnings.add("规则 $ruleId 含 excludeMatches，暂不支持，已跳过")
-                continue
-            }
-
-            val selectors = mutableListOf<GkdSelector>()
-            for (text in stringList(rule["matches"]) + stringList(rule["anyMatches"])) {
-                val sel = GkdSelectorParser.parseOrNull(text)
-                if (sel == null) {
-                    warnings.add("规则 $ruleId 的选择器无法解析：${text.take(40)}")
-                    continue
-                }
-                selectors.add(sel)
-            }
-            if (selectors.isEmpty()) continue
-
-            val action = mapAction(rule["action"] as? String)
-            if (action == null) {
-                warnings.add("规则 $ruleId 的动作 ${rule["action"]} 不支持，已跳过")
-                continue
             }
 
             val activities = stringList(rule["activityIds"]).ifEmpty { groupActivityIds }
@@ -229,19 +336,23 @@ object GkdCodec {
                     packages = listOfNotNull(pkg ?: "*"),
                     activities = activities,
                     excludeActivities = excludeActivities,
-                    priority = 0,
+                    priority = if (isSplash) PRIORITY_SPLASH else 0,
                     matchDelayMs = matchDelay.coerceIn(0L, 5000L),
                     timeoutMs = (matchTime ?: 10_000L).coerceIn(500L, 15_000L),
                     actionCooldownMs = (actionCd ?: 1500L).coerceIn(0L, 60_000L),
                     maxTriggers = (actionMax ?: 1).coerceIn(1, 20),
+                    // 顶层 `||` 已经被 parseAll 拆成多条选择器，这里一条一个 step，
+                    // 引擎「按顺序尝试、第一个命中生效」正好是 OR 语义
                     steps = selectors.map { sel ->
                         Step(
                             gkd = sel,
+                            excludes = excludes,
                             action = action,
                             postDelayMs = (rule["actionDelay"] as? Number)?.toLong() ?: 0L,
                         )
                     },
                     note = "来自 GKD 订阅：$appName / $groupName",
+                    category = category,
                 ),
             )
         }

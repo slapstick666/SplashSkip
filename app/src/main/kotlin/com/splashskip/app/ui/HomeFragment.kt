@@ -36,6 +36,9 @@ class HomeFragment : Fragment() {
     private var modeBtn: Button? = null
     private var switchView: SwitchMaterial? = null
 
+    /** 已经挂上「解析完成」回调，避免每次 refresh 重复注册。 */
+    private var waitingRules = false
+
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,
@@ -145,18 +148,42 @@ class HomeFragment : Fragment() {
         val ctx = context ?: return
         val enabled = A11yUtils.isServiceEnabled(ctx)
         val ruleCount = repo.currentIndex().size
+        val ready = repo.isReady
 
         statusTitle?.text = if (enabled) "无障碍服务：已开启" else "无障碍服务：未开启"
         enableBtn?.text = if (enabled) "查看无障碍设置" else "去开启无障碍服务"
 
         statusDetail?.text = buildString {
-            append("已加载 ").append(ruleCount).append(" 条规则")
-            if (ruleCount == 0) {
-                append("\n没有规则可用 —— 去「订阅」页添加订阅源（应用不再内置规则）")
+            if (!ready) {
+                // 订阅解析在后台线程做（1.3MB JSON5 + 四千条选择器），
+                // 这里不能直接显示 0 条，否则看起来像规则丢了
+                append("正在解析订阅规则…")
+            } else {
+                val total = repo.allRules().size
+                append("已启用 ").append(ruleCount).append(" 条规则")
+                if (total > ruleCount) {
+                    append("（订阅共解析 ").append(total).append(" 条，其余分类未勾选）")
+                }
+                if (ruleCount == 0) {
+                    append("\n没有规则可用 —— 去「订阅」页添加订阅源，并至少勾选一个分类")
+                }
             }
             if (!config.globalEnabled) append("\n总开关已关闭，当前不会执行任何点击")
-            repo.lastErrors.firstOrNull()?.let { append("\n⚠ ").append(it) }
+            // 首页只报数量，详情在订阅页 —— 一条选择器告警能有上百字，堆在这里没法看
+            repo.lastErrors.size.takeIf { it > 0 }?.let {
+                append("\n⚠ 有 ").append(it).append(" 条解析告警，去订阅页看详情")
+            }
         }
+
+        // 解析完自动重绘一次，用户不用手动切 tab
+        if (!ready && !waitingRules) {
+            waitingRules = true
+            repo.onReady {
+                waitingRules = false
+                activity?.runOnUiThread { if (isAdded) refresh() }
+            }
+        }
+
         modeBtn?.text = when (config.globalMode) {
             AppMode.LEARN -> "当前：学习模式（半自动）"
             else -> "当前：全自动"

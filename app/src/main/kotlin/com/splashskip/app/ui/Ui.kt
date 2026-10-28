@@ -1,6 +1,7 @@
 package com.splashskip.app.ui
 
 import android.content.Context
+import android.app.Activity
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
@@ -11,10 +12,14 @@ import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.widget.AppCompatButton
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updatePadding
 import com.splashskip.app.R
 
 /**
@@ -69,8 +74,11 @@ private fun mediumTypeface(): Typeface = Typeface.create("sans-serif-medium", Ty
  * 第三层是「玻璃」和「半透明塑料片」的分界：
  * 没有受光，卡片就只是一块均匀的色块，看着廉价。
  * 高光必须内缩 1dp，否则会盖住第 2 层的描边。
+ *
+ * 可见性是 internal 而不是 private：GlassDialog 要用同一套材质，
+ * 弹窗和卡片必须是同一种玻璃，否则点开弹窗会像换了个 App。
  */
-private fun Context.glassBackground(radiusPx: Float): Drawable {
+internal fun Context.glassBackground(radiusPx: Float): Drawable {
     val base = GradientDrawable().apply {
         shape = GradientDrawable.RECTANGLE
         cornerRadius = radiusPx
@@ -167,6 +175,28 @@ fun Context.pill(text: String): TextView = TextView(this).apply {
     }
 }
 
+/**
+ * 玻璃输入框。
+ *
+ * 默认的 EditText 是「下划线 + 透明底」，浮在半透明卡片上只剩一条线，
+ * 视觉上跟毛玻璃不是一个体系。这里换成半透明白底 + 淡描边 + 圆角，
+ * 跟卡片同材质但更亮一档，一眼能看出是可编辑区域。
+ */
+fun Context.input(hint: String): EditText = EditText(this).apply {
+    this.hint = hint
+    textSize = 14f
+    setTextColor(TEXT_PRIMARY)
+    setHintTextColor(TEXT_TERTIARY)
+    minHeight = 0
+    minimumHeight = dp(44)
+    setPadding(dp(13), dp(10), dp(13), dp(10))
+    background = GradientDrawable().apply {
+        cornerRadius = dp(12).toFloat()
+        setColor(0x66FFFFFF)
+        setStroke(dp(1), 0x33FFFFFF)
+    }
+}
+
 fun Context.row(): LinearLayout = LinearLayout(this).apply {
     orientation = LinearLayout.HORIZONTAL
     gravity = Gravity.CENTER_VERTICAL
@@ -212,6 +242,61 @@ fun Context.pageScroll(build: (LinearLayout) -> Unit): ScrollView {
         setBackgroundResource(R.drawable.bg_aurora)
         isFillViewport = true
         isVerticalScrollBarEnabled = false
+    }
+}
+
+/**
+ * 二级页面顶部栏：返回 + 标题。
+ *
+ * 二级页面（规则列表 / 日志 / 快照）原来既没有返回入口也没有标题，
+ * 只能靠系统返回键退出去 —— 手势导航的用户会以为是死路。
+ */
+fun Activity.pageHeader(title: String): LinearLayout {
+    val bar = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(10), dp(6), dp(16), dp(6))
+    }
+    val back = TextView(this).apply {
+        text = "‹ 返回"
+        textSize = 15f
+        typeface = mediumTypeface()
+        setTextColor(ACCENT)
+        setPadding(dp(6), dp(8), dp(10), dp(8))
+        isClickable = true
+        setOnClickListener { finish() }
+    }
+    bar.addView(back)
+    bar.addView(title(title, 17f))
+    return bar
+}
+
+/**
+ * 二级页面根容器：渐变底 + 顶部栏。
+ *
+ * 安全区由 [applyPageInsets] 处理，不在这里做 ——
+ * 底部还有一条操作栏要单独吃导航栏高度。
+ */
+fun Activity.pageRoot(title: String): LinearLayout = LinearLayout(this).apply {
+    orientation = LinearLayout.VERTICAL
+    setBackgroundResource(R.drawable.bg_aurora)
+    addView(pageHeader(title))
+}
+
+/**
+ * 二级页面的窗口 inset：根布局吃顶部/左右，底部操作栏吃导航栏高度。
+ *
+ * 必须集中在根布局一个 listener 里分发 —— 如果根布局先 CONSUMED，
+ * 子 View 的 listener 就再也收不到 inset，底部栏会压在导航条下面。
+ */
+fun Activity.applyPageInsets(root: View, bottomBar: View? = null) {
+    ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
+        val bars = insets.getInsets(
+            WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+        )
+        v.setPadding(bars.left, bars.top, bars.right, 0)
+        bottomBar?.updatePadding(bottom = bars.bottom + dp(12))
+        WindowInsetsCompat.CONSUMED
     }
 }
 

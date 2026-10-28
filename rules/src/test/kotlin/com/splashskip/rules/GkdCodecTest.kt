@@ -87,7 +87,7 @@ class GkdCodecTest {
     }
 
     @Test
-    fun `只导入开屏分类`() {
+    fun `全量导入所有分类`() {
         val text = """
             {
               id: 2,
@@ -108,7 +108,65 @@ class GkdCodecTest {
 
         val sub = GkdCodec.parseSubscription(text).subscription
         assertNotNull(sub)
-        assertEquals("只应导入开屏分类的 1 条", 1, sub!!.rules.size)
+        assertEquals("三个分类都应导入", 3, sub!!.rules.size)
+        assertEquals("开屏分类优先级最高", 1, sub.rules.count { it.priority > 0 })
+        assertEquals(3, sub.sourceRuleCount)
+    }
+
+    @Test
+    fun `excludeMatches 变成 step 的排除条件`() {
+        val text = """
+            {
+              id: 4, name: 't', version: 1,
+              apps: [{ id: 'com.demo.app', groups: [
+                { key: 1, name: '开屏广告', rules: [
+                  { key: 0, matches: '@[text="跳过"]', excludeMatches: '[text="青少年模式"]' }
+                ] }
+              ] }]
+            }
+        """.trimIndent()
+
+        val result = GkdCodec.parseSubscription(text)
+        val sub = result.subscription
+        assertNotNull("含 excludeMatches 的规则应保留", sub)
+        assertEquals(1, sub!!.rules.size)
+        assertEquals(1, sub.rules.first().steps.first().excludes.size)
+    }
+
+    @Test
+    fun `排除条件解析失败时整条规则跳过`() {
+        val text = """
+            {
+              id: 6, name: 't', version: 1,
+              apps: [{ id: 'com.demo.app', groups: [
+                { key: 1, name: '开屏广告', rules: [
+                  { key: 0, matches: '@[text="跳过"]', excludeMatches: '[text="a"] -> [text="b"]' }
+                ] }
+              ] }]
+            }
+        """.trimIndent()
+
+        val result = GkdCodec.parseSubscription(text)
+        assertTrue("应产生告警", result.warnings.any { it.contains("排除条件") })
+        assertTrue("该规则应被跳过", result.subscription == null || result.subscription!!.rules.isEmpty())
+    }
+
+    @Test
+    fun `顶层逻辑或展开成多条 step`() {
+        val text = """
+            {
+              id: 7, name: 't', version: 1,
+              apps: [{ id: 'com.demo.app', groups: [
+                { key: 1, name: '开屏广告', rules: [
+                  { key: 0, matches: '([vid="btn_skip"]) || ([text*="跳过"])' }
+                ] }
+              ] }]
+            }
+        """.trimIndent()
+
+        val sub = GkdCodec.parseSubscription(text).subscription
+        assertNotNull(sub)
+        assertEquals("两段 OR 应各成一步", 2, sub!!.rules.first().steps.size)
     }
 
     @Test
@@ -136,21 +194,46 @@ class GkdCodecTest {
     }
 
     @Test
-    fun `excludeMatches 的规则被跳过并记告警`() {
+    fun `按订阅声明的分类给规则打标`() {
         val text = """
             {
-              id: 4, name: 't', version: 1,
+              id: 8, name: 't', version: 1,
+              categories: [
+                { key: 0, name: '开屏广告', enable: true },
+                { key: 9, name: '功能类', enable: false }
+              ],
               apps: [{ id: 'com.demo.app', groups: [
-                { key: 1, name: '开屏广告', rules: [
-                  { key: 0, matches: '@[text="a"]', excludeMatches: '[text="b"]' }
-                ] }
+                { key: 1, name: '开屏广告', rules: [{ key: 0, matches: '@[text="跳过"]' }] },
+                { key: 2, name: '功能类-自动签到', rules: [{ key: 0, matches: '@[text="签到"]' }] },
+                { key: 3, name: '局部广告', rules: [{ key: 0, matches: '@[text="关闭"]' }] }
               ] }]
             }
         """.trimIndent()
 
-        val result = GkdCodec.parseSubscription(text)
-        assertTrue("应产生告警", result.warnings.any { it.contains("excludeMatches") })
-        assertTrue("该规则应被跳过", result.subscription == null || result.subscription!!.rules.isEmpty())
+        val sub = GkdCodec.parseSubscription(text).subscription
+        assertNotNull(sub)
+        assertEquals(listOf("开屏广告", "功能类", "其他"), sub!!.rules.map { it.category })
+        assertEquals("开屏广告", sub.categories.first().name)
+        assertTrue("只有开屏广告默认启用", sub.categories.first().enabledByDefault)
+        assertFalse(sub.categories[1].enabledByDefault)
+        // 开屏分类仍然享受优先级加成
+        assertEquals(1, sub.rules.count { it.priority > 0 })
+    }
+
+    @Test
+    fun `没有 categories 的老订阅分类为空`() {
+        val text = """
+            {
+              id: 9, name: 't', version: 1,
+              apps: [{ id: 'com.demo.app', groups: [
+                { key: 1, name: '开屏广告', rules: [{ key: 0, matches: '@[text="跳过"]' }] }
+              ] }]
+            }
+        """.trimIndent()
+
+        val sub = GkdCodec.parseSubscription(text).subscription
+        assertNotNull(sub)
+        assertEquals("", sub!!.rules.first().category)
     }
 
     @Test
@@ -182,18 +265,19 @@ class GkdCodecTest {
         assertNotNull("解析失败：${result.fatal}", sub)
 
         val rules = sub!!.rules
-        assertTrue("应导入开屏规则", rules.isNotEmpty())
+        assertTrue("应导入规则", rules.isNotEmpty())
 
         val packages = rules.map { it.packages.first() }.filter { it != "*" }.distinct()
-        println("真实订阅导入开屏规则 ${rules.size} 条，覆盖 ${packages.size} 个 App")
+        println("真实订阅导入规则 ${rules.size} 条，覆盖 ${packages.size} 个 App")
 
         // 每条规则都必须带解析好的 GKD 选择器，否则匹配器无从下手
         assertTrue("有规则没带上 GKD 选择器", rules.all { r -> r.steps.isNotEmpty() })
 
-        // 包名必须是合法的 Android 包名形态
+        // 包名形态校验。订阅里有一个 id 为 "android" 的伪应用（Android 系统弹窗），
+        // 它确实会出现在事件里，所以只拦空串和以点开头的脏数据
         assertTrue(
-            "包名形态异常：${packages.filter { !it.contains('.') }.take(3)}",
-            packages.all { it.contains('.') && !it.startsWith('.') },
+            "包名形态异常：${packages.filter { it.isBlank() || it.startsWith('.') }.take(3)}",
+            packages.all { it.isNotBlank() && !it.startsWith('.') },
         )
 
         // 规则 id 必须全局唯一 —— 仓库用 id 作 Map 的键去重，

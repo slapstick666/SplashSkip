@@ -43,27 +43,32 @@ class SkipEngine(
                 return Decision.Idle
             }
 
-            val rule = RuleResolver.resolve(host.currentRules(), pkg, activity)
-            if (rule == null) {
+            // 同一界面可能挂多条规则（开屏 / 全屏广告 / 更新提示…），按优先级降序
+            val candidates = RuleResolver.resolveAll(host.currentRules(), pkg, activity)
+                .filter { rule ->
+                    val last = lastClickAt[rule.id]
+                    last == null || now - last >= rule.actionCooldownMs
+                }
+            if (candidates.isEmpty()) {
                 session = null
                 return Decision.Idle
             }
 
-            // 冷却：同一规则两次触发之间必须间隔够久
-            val last = lastClickAt[rule.id]
-            if (last != null && now - last < rule.actionCooldownMs) {
-                session = null
-                return Decision.Idle
+            // 学习模式：确认粒度是「App」而不是「规则」—— 一个 App 全量导入后
+            // 可能有十几条规则，逐条弹确认会把人烦死
+            val usable = if (mode == AppMode.LEARN) {
+                val confirmed = candidates.filter { host.isConfirmed(pkg) }
+                if (confirmed.isEmpty()) {
+                    session = null
+                    host.onConfirmNeeded(candidates.first())
+                    return Decision.NeedsConfirm(candidates.first())
+                }
+                confirmed
+            } else {
+                candidates
             }
 
-            // 学习模式：第一次遇到这个规则，先问用户
-            if (mode == AppMode.LEARN && !host.isConfirmed(rule.id)) {
-                session = null
-                host.onConfirmNeeded(rule)
-                return Decision.NeedsConfirm(rule)
-            }
-
-            s = Session(pkg, activity, rule, now)
+            s = Session(pkg, activity, usable, now)
             session = s
         }
 
@@ -89,20 +94,21 @@ class SkipEngine(
         val elapsed = now - s.startedAt
 
         // 1. 会话超时
-        if (elapsed > s.rule.timeoutMs) {
+        if (elapsed > s.timeoutMs) {
             session = null
-            return Decision.Exhausted("会话超时 ${s.rule.timeoutMs}ms")
+            return Decision.Exhausted("会话超时 ${s.timeoutMs}ms")
         }
 
         // 2. 还在 matchDelay 静默期
-        if (elapsed < s.rule.matchDelayMs) {
-            return Decision.Retry(s.rule.matchDelayMs - elapsed)
+        val matchDelay = s.rules.minOfOrNull { it.matchDelayMs } ?: 0L
+        if (elapsed < matchDelay) {
+            return Decision.Retry(matchDelay - elapsed)
         }
 
         // 3. 尝试次数上限
-        if (s.attempts >= s.rule.maxTriggers) {
+        if (s.attempts >= s.maxTriggers) {
             session = null
-            return Decision.Exhausted("已达尝试上限 ${s.rule.maxTriggers} 次")
+            return Decision.Exhausted("已达尝试上限 ${s.maxTriggers} 次")
         }
 
         // 4. 最小间隔保护（contentChanged 抖动）
@@ -118,32 +124,44 @@ class SkipEngine(
             return nextRetry(s)
         }
 
-        // 5. 按 steps 顺序尝试，第一个成功的生效。
-        // 所有 step 都是 GKD 选择器，匹配器已按「可点击优先、DFS 序靠前」排好序，
+        // 5. 按「规则优先级降序 → 规则内 step 顺序」尝试，第一个成功的生效。
+        // 每个 step 都是 GKD 选择器，匹配器已按「可点击优先、DFS 序靠前」排好序，
         // 第一个候选就是最优解。不套额外的启发式护栏 —— GKD 规则精确到具体节点
         //（连父子兄弟关系都写明了），套「右上角 + 短文本」这类规则只会误杀真规则。
-        for (step in s.rule.steps) {
-            val matched = GkdMatcher.match(step.gkd, nodes)
-            val best = matched.firstOrNull()?.target ?: continue
+        for (rule in s.rules) {
+            // 每条规则自己的静默期：组里最短的那个决定了整组什么时候开始试，
+            // 但延迟更长的规则仍然要等到自己的时间点
+            if (elapsed < rule.matchDelayMs) continue
+            for (step in rule.steps) {
+                // excludeMatches：这些节点在界面上时规则不生效
+                if (step.excludes.isNotEmpty() &&
+                    step.excludes.any { GkdMatcher.match(it, nodes).isNotEmpty() }
+                ) {
+                    continue
+                }
 
-            val ok = host.perform(best, step)
-            if (ok) {
-                lastClickAt[s.rule.id] = now
-                session = null
-                host.onHit(
-                    HitRecord(
-                        at = now,
-                        pkg = s.pkg,
-                        activity = s.activity,
-                        ruleId = s.rule.id,
-                        ruleName = s.rule.name,
-                        action = step.action,
-                        matchedText = best.textOrDesc(),
-                        success = true,
-                        note = "第 ${s.attempts} 次尝试命中",
-                    ),
-                )
-                return Decision.Skipped
+                val matched = GkdMatcher.match(step.gkd, nodes)
+                val best = matched.firstOrNull()?.target ?: continue
+
+                val ok = host.perform(best, step)
+                if (ok) {
+                    lastClickAt[rule.id] = now
+                    session = null
+                    host.onHit(
+                        HitRecord(
+                            at = now,
+                            pkg = s.pkg,
+                            activity = s.activity,
+                            ruleId = rule.id,
+                            ruleName = rule.name,
+                            action = step.action,
+                            matchedText = best.textOrDesc(),
+                            success = true,
+                            note = "第 ${s.attempts} 次尝试命中",
+                        ),
+                    )
+                    return Decision.Skipped
+                }
             }
         }
 

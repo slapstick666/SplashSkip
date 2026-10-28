@@ -24,17 +24,17 @@ class ConfirmReceiver : BroadcastReceiver() {
 
         when (intent.action) {
             ACTION_CONFIRM -> {
-                repo.setConfirmed(ruleId, true)
+                repo.setConfirmed(pkg, true)
                 config.setMode(pkg, AppMode.AUTO)
             }
             ACTION_IGNORE -> {
                 // 标记为已确认 + 禁用，避免下次再弹
-                repo.setConfirmed(ruleId, true)
+                repo.setConfirmed(pkg, true)
                 config.setMode(pkg, AppMode.DISABLED)
             }
         }
 
-        runCatching { NotificationManagerCompat.from(context).cancel(ruleId.hashCode()) }
+        runCatching { NotificationManagerCompat.from(context).cancel(pkg.hashCode()) }
     }
 
     companion object {

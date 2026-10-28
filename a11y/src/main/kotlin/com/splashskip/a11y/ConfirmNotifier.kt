@@ -25,11 +25,15 @@ object ConfirmNotifier {
     private val lastShownAt = HashMap<String, Long>()
 
     fun show(context: Context, rule: AppRule) {
+        // 确认粒度是 App：全量导入订阅后一个 App 有十几条规则，
+        // 按规则 id 节流/去重会连弹十几个通知
+        val target = rule.packages.firstOrNull()?.takeIf { it != "*" } ?: rule.id
+
         val now = SystemClock.elapsedRealtime()
         synchronized(lastShownAt) {
-            val last = lastShownAt[rule.id]
+            val last = lastShownAt[target]
             if (last != null && now - last < MIN_INTERVAL_MS) return
-            lastShownAt[rule.id] = now
+            lastShownAt[target] = now
         }
 
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
@@ -39,7 +43,7 @@ object ConfirmNotifier {
 
         val confirmPi = PendingIntent.getBroadcast(
             context,
-            rule.id.hashCode(),
+            target.hashCode(),
             Intent(context, ConfirmReceiver::class.java).apply {
                 action = ConfirmReceiver.ACTION_CONFIRM
                 putExtra(ConfirmReceiver.EXTRA_RULE_ID, rule.id)
@@ -50,7 +54,7 @@ object ConfirmNotifier {
 
         val ignorePi = PendingIntent.getBroadcast(
             context,
-            rule.id.hashCode() + 1,
+            target.hashCode() + 1,
             Intent(context, ConfirmReceiver::class.java).apply {
                 action = ConfirmReceiver.ACTION_IGNORE
                 putExtra(ConfirmReceiver.EXTRA_RULE_ID, rule.id)
@@ -69,7 +73,7 @@ object ConfirmNotifier {
             .addAction(0, "不用了", ignorePi)
             .build()
 
-        runCatching { nm.notify(rule.id.hashCode(), notification) }
+        runCatching { nm.notify(target.hashCode(), notification) }
     }
 
     private fun ensureChannel(context: Context, nm: NotificationManager) {
