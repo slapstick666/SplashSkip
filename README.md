@@ -1,6 +1,7 @@
 # SplashSkip —— 安卓开屏广告跳过
 
 [![Build](https://github.com/slapstick666/SplashSkip/actions/workflows/build.yml/badge.svg)](https://github.com/slapstick666/SplashSkip/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/slapstick666/SplashSkip)](https://github.com/slapstick666/SplashSkip/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 参考 [GKD](https://github.com/gkd-kit/gkd) 的规则化思路，实现一个基于无障碍服务的开屏广告跳过工具。
@@ -42,6 +43,8 @@
 > 首次在 Android Studio 打开时，IDE 会自动补 Gradle Wrapper 并同步依赖。
 
 ## 正式版
+
+**直接下载安装**：[Releases](https://github.com/slapstick666/SplashSkip/releases/latest) → `SplashSkip-1.3.2.apk`
 
 | 项 | 值 |
 |---|---|
