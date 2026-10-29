@@ -1,5 +1,8 @@
 # SplashSkip —— 安卓开屏广告跳过
 
+[![Build](https://github.com/slapstick666/SplashSkip/actions/workflows/build.yml/badge.svg)](https://github.com/slapstick666/SplashSkip/actions/workflows/build.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 参考 [GKD](https://github.com/gkd-kit/gkd) 的规则化思路，实现一个基于无障碍服务的开屏广告跳过工具。
 
 > **完整设计文档见 [`docs/设计说明.md`](docs/设计说明.md)** —— 版本适配、权限、识别方式、触发逻辑、
@@ -16,8 +19,8 @@
 
 | 模块 | 职责 | 依赖 |
 |---|---|---|
-| `:core` | 规则模型、匹配器、护栏、调度引擎。**零 `android.*` 依赖**，可纯 JVM 单测 | — |
-| `:rules` | 规则解析、三级来源合并、订阅更新、签名校验 | `:core` |
+| `:core` | 规则模型、GKD 选择器解析与匹配、调度引擎。**零 `android.*` 依赖**，可纯 JVM 单测 | — |
+| `:rules` | 规则解析、GKD 订阅拉取与合并、分类开关 | `:core` |
 | `:a11y` | 无障碍服务、节点树遍历、动作降级、事件节流 | `:core` `:rules` |
 | `:app` | UI、权限引导、装配 | 全部 |
 
